@@ -1,8 +1,8 @@
 import mysql.connector
-import json
 import datetime
 from flask import jsonify
 import DTO
+from bin import global_var as VAR
 
 # select all
 query_get_all_history_sensor = "select history_id, alarm_status, loc_name, device_name, date_reading, alarm_type " \
@@ -30,8 +30,8 @@ query_insert_smoke_sensor = "insert into smoke_sensor(smoke_name, loc_id)values{
 query_insert_sensor_loc = "insert into sensor_loc(loc_name) values{};"
 query_insert_temp_sensor = "insert into temp_sensor(temp_name, loc_id) values{};"
 query_insert_gas_sensor = "insert into gas_sensor(gas_name, loc_id) values{};"
-query_insert_history_sensor = "insert into history_sensor(device_id, temp_reading, smoke_reading, gas_reading, " \
-                              "date_reading, temp_id, smoke_id, gas_id) values{}; "
+query_insert_history_sensor = "insert into history_sensor(device_id, temp_reading, smoke_reading, gas_reading," \
+                              " date_reading, temp_id, smoke_id, gas_id, alarm_id) values{}; "
 
 # delete
 query_delete_device_by_id = "DELETE FROM device WHERE device_id = {} LIMIT 1;"
@@ -50,7 +50,8 @@ def get_fail_db_message():
 
 
 def init_db(host, user, pw, _db):
-    """MySQL database initialization"""
+    """MySQL database initialization
+    :return connection to the DB"""
     try:
         return mysql.connector.connect(
             host=host,
@@ -83,7 +84,8 @@ def default(o):
 def handle_select_query(query, dto, *args):
     """Perform the QUERY and return an DTO json object
     If an argument is passed, it assumes that it is ID
-    to fill in the query"""
+    to fill in the query
+    :return DTO type"""
     if dto is not None:
         cursor = db.cursor()
 
@@ -105,6 +107,7 @@ def handle_select_query(query, dto, *args):
         if len(db_results) == 0:
             return
 
+        # add key to the dictionary for each value
         for row in db_results:
             for i in range(len(row)):
                 if isinstance(row[i], (datetime.date, datetime.datetime)):
@@ -119,16 +122,16 @@ def handle_select_query(query, dto, *args):
         return return_message(None)
 
 
-def return_message(String):
-    if String is None:
-        return jsonify(
-            {"success": False,
-             "message": "Request unsuccessful"}
-        )
-    return jsonify(
-        {"success": True,
-         "message": String}
-    )
+def return_message(message):
+    if message is None:
+        return jsonify({
+            "success": False,
+            "message": "Request unsuccessful"
+        })
+    return jsonify({
+        "success": True,
+        "message": message
+    })
 
 
 def handle_insert_query(query, *args):
@@ -210,10 +213,18 @@ def insert_gas_sensor(gas_name, loc_id):
     return return_message("A gas sensor was added")
 
 
-def insert_history_sensor(device_id, temp_reading, smoke_reading, gas_reading, date_reading, temp_id, smoke_id, gas_id):
+def insert_history_sensor(device_id, temp_reading, smoke_reading, gas_reading, date_reading, temp_id, smoke_id, gas_id,
+                          alarm_id):
     handle_insert_query(query_insert_history_sensor, device_id, temp_reading, smoke_reading, gas_reading, date_reading,
-                        temp_id, smoke_id, gas_id)
+                        temp_id, smoke_id, gas_id, alarm_id)
     return return_message("A sensor's history was added")
+
+
+def insert_history_sensor_backend(device_id, temp_reading, smoke_reading, gas_reading, date_reading, temp_id, smoke_id,
+                                  gas_id, alarm_id):
+    handle_insert_query(query_insert_history_sensor, device_id, temp_reading, smoke_reading, gas_reading, date_reading,
+                        temp_id, smoke_id, gas_id, alarm_id)
+    return True
 
 
 # GET queries
@@ -264,3 +275,74 @@ def get_sensor_loc_by_id(loc_id):
 
 def get_device_by_id(device_id):
     return handle_select_query(query_get_device_by_id, DTO.get_dto_device(), device_id)
+
+
+# GET charts
+def get_pie_chart():
+    fire_count = 0
+    safe_count = 0
+    imminent_count = 0
+    hists = handle_select_query(query_get_all_history_sensor, DTO.get_dto_history_sensor()).json
+
+    for hist in hists:
+        if hist["alarm_status"].lower() == VAR.FIRE.lower():
+            fire_count += 1
+        elif hist["alarm_status"].lower() == VAR.SAFE.lower():
+            safe_count += 1
+        elif hist["alarm_status"].lower() == VAR.IMMINENT.lower():
+            imminent_count += 1
+
+    return jsonify({
+        VAR.FIRE: fire_count,
+        VAR.SAFE: safe_count,
+        VAR.IMMINENT: imminent_count,
+        "total": fire_count + safe_count + imminent_count
+    })
+
+
+def get_last_6_months(cur_month):
+    """:param cur_month current month
+    :return list of the 6 months ago until current month"""
+    months = [i + 1 for i in range(12)]
+
+    if cur_month >= 6:
+        last_6 = months[cur_month - 6:cur_month]
+    else:
+        last_6 = months[cur_month + 6:]
+        last_6.extend(months[:cur_month])
+    return last_6
+
+
+def get_bar_chart(cur_month):
+    hists = handle_select_query(query_get_all_history_sensor, DTO.get_dto_history_sensor()).json
+    last_6 = get_last_6_months(cur_month)
+    last_6_val = [0] * 6
+    fire = {}
+
+    for i in range(6):
+        fire[last_6[i]] = last_6_val[i]
+
+    for hist in hists:
+        month = int(hist["date_reading"].split("-")[1])
+        if hist['alarm_status'].lower() == VAR.FIRE.lower():
+            for k in fire.keys():
+                if month == k:
+                    fire[k] += 1
+
+    fire_dict = []
+    for v in fire.values():
+        fire_dict.append(v)
+
+    # translated_fire = month_int_to_str(fire)
+    # return jsonify(translated_fire)
+    return jsonify(fire_dict)
+
+
+def month_int_to_str(fire):
+    str_months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    new_fire = {}
+
+    for k in fire.keys():
+        new_fire[str_months[int(k) - 1]] = fire[k]
+
+    return new_fire
